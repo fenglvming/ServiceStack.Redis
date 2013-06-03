@@ -49,12 +49,18 @@ namespace ServiceStack.Redis
 		private List<RedisEndPoint> ReadOnlyHosts { get; set; }
 
 		private RedisClient[] writeClients = new RedisClient[0];
+       
 		protected int WritePoolIndex;
 
 		private RedisClient[] readClients = new RedisClient[0];
+        
 		protected int ReadPoolIndex;
 
 		protected int RedisClientCounter = 0;
+        
+        private object writeClientsLock = new object();
+        private object readClientsLock = new object();
+        protected int RedisMaxConnection = 320;
 
 		protected RedisClientManagerConfig Config { get; set; }
 
@@ -155,7 +161,7 @@ namespace ServiceStack.Redis
 		/// <returns></returns>
 		public IRedisClient GetClient()
 		{
-			lock (writeClients)
+			lock (writeClientsLock)
 			{
 				AssertValidReadWritePool();
 
@@ -165,7 +171,7 @@ namespace ServiceStack.Redis
 					if (PoolTimeOut.HasValue)
 					{
 						// wait for a connection, cry out if made to wait too long
-						if (!Monitor.Wait(writeClients, PoolTimeOut.Value))
+                        if (!Monitor.Wait(writeClientsLock, PoolTimeOut.Value))
 							throw new TimeoutException(PoolTimeoutError);
 					}
 					else
@@ -239,6 +245,18 @@ namespace ServiceStack.Redis
                     }
                 }
             }
+            //do something to extends the capacity of the writes client;
+            //extends two times of the original size
+            int originalLength = writeClients.Length;
+            if (originalLength * 2 < RedisMaxConnection)
+            {
+                int length = writeClients.Length << 1;
+                var newwriteClients = new RedisClient[length];
+                Array.ConstrainedCopy(writeClients, 0, newwriteClients, 0, writeClients.Length);
+                writeClients = newwriteClients;
+                var ret = GetInActiveWriteClient();
+                return ret;
+            }
             return null;
 		}
 
@@ -248,14 +266,14 @@ namespace ServiceStack.Redis
 		/// <returns></returns>
 		public virtual IRedisClient GetReadOnlyClient()
 		{
-			lock (readClients)
+			lock (readClientsLock)
 			{
 				AssertValidReadOnlyPool();
 
 				RedisClient inActiveClient;
 				while ((inActiveClient = GetInActiveReadClient()) == null)
 				{
-					Monitor.Wait(readClients);
+                    Monitor.Wait(readClientsLock);
 				}
 
 				ReadPoolIndex++;
@@ -322,32 +340,47 @@ namespace ServiceStack.Redis
                         return client;
                     }
                 }
-            }            
-			return null;
+            }
+
+            //do something to extends the capacity of the readclient;
+            //extends two times of the original size
+            int originalLength = readClients.Length;
+            if (originalLength * 2 < RedisMaxConnection)
+            {
+                int length = writeClients.Length << 1;
+                var newreadClients = new RedisClient[length];
+                Array.ConstrainedCopy(readClients, 0, newreadClients, 0, originalLength);
+                readClients = newreadClients;
+                var ret = GetInActiveReadClient();
+                return ret;
+            }
+            return null;
 		}
+
+
 
 		public void DisposeClient(RedisNativeClient client)
 		{
-			lock (readClients)
+			lock (readClientsLock)
 			{
 				for (var i = 0; i < readClients.Length; i++)
 				{
 					var readClient = readClients[i];
 					if (client != readClient) continue;
 					client.Active = false;
-					Monitor.PulseAll(readClients);
+                    Monitor.PulseAll(readClientsLock);
 					return;
 				}
 			}
 
-			lock (writeClients)
+			lock (writeClientsLock)
 			{
 				for (var i = 0; i < writeClients.Length; i++)
 				{
 					var writeClient = writeClients[i];
 					if (client != writeClient) continue;
 					client.Active = false;
-					Monitor.PulseAll(writeClients);
+                    Monitor.PulseAll(writeClientsLock);
 					return;
 				}
 			}
@@ -369,10 +402,10 @@ namespace ServiceStack.Redis
 		/// <param name="client">The client.</param>
 		public void DisposeReadOnlyClient( RedisNativeClient client )
 		{
-			lock( readClients )
+			lock( readClientsLock )
 			{
 				client.Active = false;
-				Monitor.PulseAll( readClients );
+                Monitor.PulseAll(readClientsLock);
 			}
 		}
 
@@ -382,10 +415,10 @@ namespace ServiceStack.Redis
 		/// <param name="client">The client.</param>
 		public void DisposeWriteClient( RedisNativeClient client )
 		{
-			lock( writeClients )
+			lock( writeClientsLock )
 			{
 				client.Active = false;
-				Monitor.PulseAll( writeClients );
+                Monitor.PulseAll(writeClientsLock);
 			}
 		}
 
