@@ -48,16 +48,43 @@ namespace ServiceStack.Redis.Support
 		public void AddTarget(T node, int weight)
 		{
 			// increase the replicas of the node by weight
-			int repeat = weight > 0 ? weight * Replicas : Replicas;
+            int repeat = GetRepeat(weight);
 
 			for (int i = 0; i < repeat; i++)
 			{
-				string identifier = node.GetHashCode().ToString() + "-" + i;
-				ulong hashCode = _hashFunction(identifier);
+                string identifier = GetIdentifier(node,i);
+                ulong hashCode = GetHashCode(identifier);
 				_circle.Add(hashCode, node);
 			}
 		}
 
+        public int GetRepeat(int weight)
+        {
+            return weight > 0 ? weight * Replicas : Replicas;
+        }
+
+        public string GetIdentifier(T node,int index) {
+            return node.GetHashCode().ToString() + "-" + index;
+        }
+
+        public ulong GetHashCode(string identifier) {
+            return _hashFunction(identifier);
+        }
+
+
+
+        public void RemoveTarget(T node ,int weight) {
+            // increase the replicas of the node by weight
+            int repeat = GetRepeat(weight);
+            for (int i = 0; i < repeat; i++)
+            {
+                string identifier = GetIdentifier(node, i);
+                ulong hashCode = GetHashCode(identifier);
+                if(_circle.ContainsKey(hashCode)){
+                    _circle.Remove(hashCode);
+                }
+            }
+        } 
 		/// <summary>
 		///   A variation of Binary Search algorithm. Given a number, matches the next highest number from the sorted array. 
 		///   If a higher number does not exist, then the first number in the array is returned.
